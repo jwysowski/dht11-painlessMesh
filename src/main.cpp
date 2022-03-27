@@ -6,21 +6,10 @@
 
 #define BAUDRATE        9600
 
-#define	NODE_ID_SIZE	11
-#define	DATA_SIZE		6
-#define	CHECKSUM_SIZE	3
-#define	MESSAGE_SIZE	21
-
-#define TEMPERATURE		true
-#define HUMIDITY		false
-
 //DHT
 #define DHTPIN          	2
 #define DHTTYPE         	DHT11
 #define OVERFLOW_LIMIT  	0x7FFFFF
-#define	TEMPERATURE_TYPE	'0'
-#define	HUMIDITY_TYPE		'1'
-#define	CHECKSUM_MOD		0x100
 
 //mesh
 #define PORT            5555
@@ -31,20 +20,29 @@ const char *password = "123456789";
 const char *temp_msg = "Temperature is: ";
 const char *hum_msg = "Humidity is: ";
 
-DHT dht(DHTPIN, DHTTYPE);
-painlessMesh mesh;
-
 #define	START_SIGN		':'
-#define	END_SIGN		"\n"
+#define	END_SIGN		'\n'
+#define	NODE_ID_SIZE	10
+#define	DATA_SIZE		5
+#define	CHECKSUM_SIZE	2
+#define	MESSAGE_SIZE	21
+#define ZERO			48
+
+#define	TEMPERATURE_TYPE	'0'
+#define	HUMIDITY_TYPE		'1'
+#define	CHECKSUM_MOD		0x100
+
+#define TEMPERATURE		true
+#define HUMIDITY		false
 
 struct data_frame {
 	char data_type;
 	union data {
-		char temperature[DATA_SIZE];
-		char humidity[DATA_SIZE];
+		char temperature[DATA_SIZE + 1];
+		char humidity[DATA_SIZE + 1];
 	} measurement;
-	char node_id[NODE_ID_SIZE];
-	char checksum[CHECKSUM_SIZE];
+	char node_id[NODE_ID_SIZE + 1];
+	char checksum[CHECKSUM_SIZE + 1];
 };
 
 void build_data_frame(data_frame &frame, uint32 id, bool is_temp, float val);
@@ -52,7 +50,11 @@ void get_message(char *msg, data_frame &frame);
 uint16 checksum(data_frame &frame);
 void IRAM_ATTR timer_overflow();
 
-volatile int overflows;
+volatile int overflows = 0;
+volatile int temp_read = 0;
+
+DHT dht(DHTPIN, DHTTYPE);
+painlessMesh mesh;
 
 void setup() {
 	Serial.begin(BAUDRATE);
@@ -74,20 +76,24 @@ void setup() {
 void loop() {
 	mesh.update();
 
-	if (overflows == 4) {
-		overflows = 0;
+	if (!temp_read &&  overflows == 6) {
+		temp_read = 1;
 		float temp = dht.readTemperature();
 		if (!isnan(temp)) {
-			char message[MESSAGE_SIZE];
+			char message[MESSAGE_SIZE] = {0};
 			data_frame frame;
 			build_data_frame(frame, mesh.getNodeId(), TEMPERATURE, temp);
 			get_message(message, frame);
 			mesh.sendBroadcast(String(message));
 		}
+	}
 
+	else if (overflows == 12) {
+		overflows = 0;
+		temp_read = 0;
 		float hum = dht.readHumidity();
 		if (!isnan(hum)) {
-			char message[MESSAGE_SIZE];
+			char message[MESSAGE_SIZE] = {0};
 			data_frame frame;
 			build_data_frame(frame, mesh.getNodeId(), HUMIDITY, hum);
 			get_message(message, frame);
@@ -110,7 +116,8 @@ void get_message(char *msg, data_frame &frame) {
 	
 	sprintf(frame.checksum, "%x", checksum(frame));
 	strcat(msg, frame.checksum);
-	strcat(msg, END_SIGN);
+	msg[MESSAGE_SIZE - 2] = END_SIGN;
+	msg[MESSAGE_SIZE - 1] = '\0';
 }
 
 uint16 checksum(data_frame &frame) {
