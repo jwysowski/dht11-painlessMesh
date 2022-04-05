@@ -4,57 +4,33 @@
 #include <Adafruit_Sensor.h>
 #include <Ticker.h>
 
-#define BAUDRATE        9600
-
-//DHT
-#define DHTPIN          	2
-#define DHTTYPE         	DHT11
-#define OVERFLOW_LIMIT  	0x7FFFFF
-
-//mesh
-#define PORT            5555
-
-const char *ssid = "esp_mesh";
-const char *password = "123456789";
-
-const char *temp_msg = "Temperature is: ";
-const char *hum_msg = "Humidity is: ";
-
-#define	START_SIGN		':'
-#define	END_SIGN		'\n'
-#define	NODE_ID_SIZE	10
-#define	DATA_SIZE		5
-#define	CHECKSUM_SIZE	2
-#define	MESSAGE_SIZE	21
-#define ZERO			48
-
-#define	TEMPERATURE_TYPE	'0'
-#define	HUMIDITY_TYPE		'1'
-#define	CHECKSUM_MOD		0x100
-
-#define TEMPERATURE		true
-#define HUMIDITY		false
-
-struct data_frame {
-	char data_type;
-	union data {
-		char temperature[DATA_SIZE + 1];
-		char humidity[DATA_SIZE + 1];
-	} measurement;
-	char node_id[NODE_ID_SIZE + 1];
-	char checksum[CHECKSUM_SIZE + 1];
-};
+#include "data.hpp"
+#include "handlers.hpp"
 
 void build_data_frame(data_frame &frame, uint32 id, bool is_temp, float val);
 void get_message(char *msg, data_frame &frame);
 uint16 checksum(data_frame &frame);
+void decode_msg(const char *msg, data_frame &frame);
+uint16 checksum(data_frame &frame);
+bool validate(data_frame &frame);
+void received_callback(const uint32_t &from, const String &msg);
 void IRAM_ATTR timer_overflow();
+
+DHT dht(DHTPIN, DHTTYPE);
+painlessMesh mesh;
 
 volatile int overflows = 0;
 volatile int temp_read = 0;
 
-DHT dht(DHTPIN, DHTTYPE);
-painlessMesh mesh;
+float temp_target = 0.0;
+float hum_target = 0.0;
+float current_temp = 0.0;
+float current_hum = 0.0;
+char temp_mode = TEMPERATURE_NORM_TYPE;
+char hum_mode = HUMIDITY_NORM_TYPE;
+
+extern void (*mesh_receive_handlers[6])(char type, float target);
+extern void (*measurement_handlers[6])();
 
 void setup() {
 	Serial.begin(BAUDRATE);
@@ -64,6 +40,7 @@ void setup() {
 
 	mesh.init(ssid, password, PORT);
 	mesh.setContainsRoot(true);
+	mesh.onReceive(&received_callback);
 
 	//dht
 	timer1_attachInterrupt(timer_overflow);
@@ -78,27 +55,27 @@ void loop() {
 
 	if (!temp_read &&  overflows == 6) {
 		temp_read = 1;
-		float temp = dht.readTemperature();
-		if (!isnan(temp)) {
-			char message[MESSAGE_SIZE] = {0};
-			data_frame frame;
-			build_data_frame(frame, mesh.getNodeId(), TEMPERATURE, temp);
-			get_message(message, frame);
-			mesh.sendBroadcast(String(message));
-		}
+		int handler_index = get_handler_index(temp_mode);	
+		measurement_handlers[handler_index]();
+
+		char message[MESSAGE_SIZE] = {0};
+		data_frame frame;
+		build_data_frame(frame, mesh.getNodeId(), TEMPERATURE, current_temp);
+		get_message(message, frame);
+		mesh.sendBroadcast(String(message));
 	}
 
 	else if (overflows == 12) {
 		overflows = 0;
 		temp_read = 0;
-		float hum = dht.readHumidity();
-		if (!isnan(hum)) {
-			char message[MESSAGE_SIZE] = {0};
-			data_frame frame;
-			build_data_frame(frame, mesh.getNodeId(), HUMIDITY, hum);
-			get_message(message, frame);
-			mesh.sendBroadcast(String(message));
-		}
+		int handler_index = get_handler_index(hum_mode);	
+		measurement_handlers[handler_index]();
+
+		char message[MESSAGE_SIZE] = {0};
+		data_frame frame;
+		build_data_frame(frame, mesh.getNodeId(), HUMIDITY, current_hum);
+		get_message(message, frame);
+		mesh.sendBroadcast(String(message));
 	}
 }
 
@@ -129,9 +106,14 @@ uint16 checksum(data_frame &frame) {
 	if (frame.data_type == TEMPERATURE_TYPE)
 		for (int i = 0; i < DATA_SIZE; i++)
 			checksum += frame.measurement.temperature[i];
-	else
+
+	if (frame.data_type == HUMIDITY_TYPE)
 		for (int i = 0; i < DATA_SIZE; i++)
 			checksum += frame.measurement.humidity[i];
+
+	else
+		for (int i = 0; i < DATA_SIZE; i++)
+			checksum += frame.measurement.target[i];
 
 	for (int i = 0; i < NODE_ID_SIZE; i++)
 		checksum += frame.node_id[i];
@@ -149,6 +131,50 @@ void build_data_frame(data_frame &frame, uint32 id, bool is_temp, float val) {
 	}
 
 	sprintf(frame.node_id, "%u", id);
+}
+
+void decode_msg(const char *msg, data_frame &frame) {
+	int start = 0;
+	while (start < MESSAGE_SIZE) {
+		if (msg[start] == START_SIGN)
+			break;
+
+		start++;
+	}
+
+	frame.data_type = msg[start + 1];
+	
+
+	if (frame.data_type == TEMPERATURE_TYPE)
+		memcpy(frame.measurement.temperature, msg + start + 2, DATA_SIZE);
+	
+	if (frame.data_type == HUMIDITY_TYPE)
+		memcpy(frame.measurement.humidity, msg + start + 2, DATA_SIZE);
+
+	else
+		memcpy(frame.measurement.target, msg + start + 2, DATA_SIZE);
+
+	memcpy(frame.node_id, msg + start + 2 + DATA_SIZE, NODE_ID_SIZE);
+	memcpy(frame.checksum, msg + start + 2 + DATA_SIZE + NODE_ID_SIZE, CHECKSUM_SIZE);
+}
+
+bool validate(data_frame &frame) {
+	uint16 frame_checksum = strtoul(frame.checksum, nullptr, 16);
+	return frame_checksum == checksum(frame);
+}
+
+void received_callback(const uint32_t &from, const String &msg) {
+	data_frame frame;
+	const char *message = msg.c_str();
+
+	decode_msg(message, frame);
+	if (!validate(frame))
+		return;
+
+	int handler_index = get_handler_index(frame.data_type);	
+	char *end_ptr = nullptr;
+	float target = strtof(frame.measurement.target, &end_ptr);
+	mesh_receive_handlers[handler_index](frame.data_type, target);
 }
 
 void IRAM_ATTR timer_overflow() {
