@@ -54,6 +54,7 @@ struct data_frame {
         
 float get_temp(int index);
 float get_hum(int index);
+int binary_search(bool is_temp, float val);
 
 #endif /* TRENDS_HPP */
 

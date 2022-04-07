@@ -9,9 +9,8 @@
 
 void build_data_frame(data_frame &frame, uint32 id, bool is_temp, float val);
 void get_message(char *msg, data_frame &frame);
-uint16 checksum(data_frame &frame);
+uint16_t checksum(data_frame &frame);
 void decode_msg(const char *msg, data_frame &frame);
-uint16 checksum(data_frame &frame);
 bool validate(data_frame &frame);
 void received_callback(const uint32_t &from, const String &msg);
 void IRAM_ATTR timer_overflow();
@@ -24,8 +23,8 @@ volatile int temp_read = 0;
 
 float temp_target = 0.0;
 float hum_target = 0.0;
-float current_temp = 0.0;
-float current_hum = 0.0;
+float current_temp = 21.0;
+float current_hum = 41.0;
 char temp_mode = TEMPERATURE_NORM_TYPE;
 char hum_mode = HUMIDITY_NORM_TYPE;
 
@@ -97,8 +96,8 @@ void get_message(char *msg, data_frame &frame) {
 	msg[MESSAGE_SIZE - 1] = '\0';
 }
 
-uint16 checksum(data_frame &frame) {
-	uint16 checksum = 0;
+uint16_t checksum(data_frame &frame) {
+	uint16_t checksum = 0;
 
 	checksum += START_SIGN;
 
@@ -143,23 +142,30 @@ void decode_msg(const char *msg, data_frame &frame) {
 	}
 
 	frame.data_type = msg[start + 1];
-	
-
-	if (frame.data_type == TEMPERATURE_TYPE)
+	if (frame.data_type == TEMPERATURE_TYPE) {
 		memcpy(frame.measurement.temperature, msg + start + 2, DATA_SIZE);
+		frame.measurement.temperature[DATA_SIZE] = '\0';
+	}
 	
-	if (frame.data_type == HUMIDITY_TYPE)
+	if (frame.data_type == HUMIDITY_TYPE) {
 		memcpy(frame.measurement.humidity, msg + start + 2, DATA_SIZE);
+		frame.measurement.humidity[DATA_SIZE] = '\0';
+	}
 
-	else
+	else {
 		memcpy(frame.measurement.target, msg + start + 2, DATA_SIZE);
+		frame.measurement.target[DATA_SIZE] = '\0';
+	}
 
 	memcpy(frame.node_id, msg + start + 2 + DATA_SIZE, NODE_ID_SIZE);
+	frame.node_id[NODE_ID_SIZE] = '\0';
+	
 	memcpy(frame.checksum, msg + start + 2 + DATA_SIZE + NODE_ID_SIZE, CHECKSUM_SIZE);
+	frame.checksum[CHECKSUM_SIZE] = '\0';
 }
 
 bool validate(data_frame &frame) {
-	uint16 frame_checksum = strtoul(frame.checksum, nullptr, 16);
+	uint16_t frame_checksum = strtoul(frame.checksum, nullptr, 16);
 	return frame_checksum == checksum(frame);
 }
 
@@ -171,7 +177,10 @@ void received_callback(const uint32_t &from, const String &msg) {
 	if (!validate(frame))
 		return;
 
-	int handler_index = get_handler_index(frame.data_type);	
+	int handler_index = get_handler_index(frame.data_type);
+	if (handler_index < 0)
+		return;
+		
 	char *end_ptr = nullptr;
 	float target = strtof(frame.measurement.target, &end_ptr);
 	mesh_receive_handlers[handler_index](frame.data_type, target);
