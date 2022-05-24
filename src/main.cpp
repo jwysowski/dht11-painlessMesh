@@ -1,8 +1,5 @@
 #include <Arduino.h>
 #include <painlessMesh.h>
-#include <DHT.h>
-#include <Adafruit_Sensor.h>
-#include <Ticker.h>
 
 #include "data.hpp"
 #include "handlers.hpp"
@@ -13,12 +10,9 @@ uint16_t checksum(data_frame &frame);
 void decode_msg(const char *msg, data_frame &frame);
 bool validate(data_frame &frame);
 void received_callback(const uint32_t &from, const String &msg);
-void IRAM_ATTR timer_overflow();
 
-DHT dht(DHTPIN, DHTTYPE);
 painlessMesh mesh;
 
-volatile int overflows = 0;
 volatile int temp_read = 0;
 
 float temp_target = 0.0;
@@ -27,12 +21,13 @@ float current_temp = 21.0;
 float current_hum = 41.0;
 char temp_mode = TEMPERATURE_NORM_TYPE;
 char hum_mode = HUMIDITY_NORM_TYPE;
+bool respond = false;
 
 extern void (*mesh_receive_handlers[6])(char type, float target);
 extern void (*measurement_handlers[6])();
 
 void setup() {
-	Serial.begin(BAUDRATE);
+	// Serial.begin(BAUDRATE);
 
 	//mesh
 	mesh.setDebugMsgTypes(ERROR | MESH_STATUS | CONNECTION | SYNC | COMMUNICATION | GENERAL | MSG_TYPES | REMOTE);   // all types on
@@ -40,39 +35,16 @@ void setup() {
 	mesh.init(ssid, password, PORT);
 	mesh.setContainsRoot(true);
 	mesh.onReceive(&received_callback);
-
-	//dht
-	timer1_attachInterrupt(timer_overflow);
-	timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);         //5MHz
-	timer1_write(OVERFLOW_LIMIT);
-
-	dht.begin();
 }
 
 void loop() {
 	mesh.update();
 
-	if (!temp_read &&  overflows == 6) {
-		temp_read = 1;
-		int handler_index = get_handler_index(temp_mode);	
-		measurement_handlers[handler_index]();
-
+	if (respond) {
+		respond = false;
 		char message[MESSAGE_SIZE] = {0};
 		data_frame frame;
-		build_data_frame(frame, mesh.getNodeId(), TEMPERATURE, current_temp);
-		get_message(message, frame);
-		mesh.sendBroadcast(String(message));
-	}
-
-	else if (overflows == 12) {
-		overflows = 0;
-		temp_read = 0;
-		int handler_index = get_handler_index(hum_mode);	
-		measurement_handlers[handler_index]();
-
-		char message[MESSAGE_SIZE] = {0};
-		data_frame frame;
-		build_data_frame(frame, mesh.getNodeId(), HUMIDITY, current_hum);
+		build_data_frame(frame, mesh.getNodeId(), TEMPERATURE, 10);
 		get_message(message, frame);
 		mesh.sendBroadcast(String(message));
 	}
@@ -184,9 +156,4 @@ void received_callback(const uint32_t &from, const String &msg) {
 	char *end_ptr = nullptr;
 	float target = strtof(frame.measurement.target, &end_ptr);
 	mesh_receive_handlers[handler_index](frame.data_type, target);
-}
-
-void IRAM_ATTR timer_overflow() {
-	overflows++;
-	timer1_write(OVERFLOW_LIMIT);
 }

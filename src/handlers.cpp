@@ -12,6 +12,8 @@ extern float current_hum;
 extern char temp_mode;
 extern char hum_mode;
 
+extern bool respond;
+
 int norm_temp_values_index = 0;
 int norm_hum_values_index = 0;
 
@@ -89,6 +91,7 @@ int get_handler_index(char number) {
 void mesh_receive_temp_handler(char type, float target) {
     temp_mode = type;
     temp_target = target;
+    respond = true;
 }
 
 void mesh_receive_hum_handler(char type, float target) {
