@@ -1,11 +1,10 @@
 #include <Arduino.h>
 #include <painlessMesh.h>
-#include <DHT.h>
-#include <Adafruit_Sensor.h>
-#include <Ticker.h>
 
 #include "data.hpp"
 #include "handlers.hpp"
+
+#define TASK_INTERVAL_MS		250
 
 void build_data_frame(data_frame &frame, uint32 id, bool is_temp, float val);
 void get_message(char *msg, data_frame &frame);
@@ -13,10 +12,12 @@ uint16_t checksum(data_frame &frame);
 void decode_msg(const char *msg, data_frame &frame);
 bool validate(data_frame &frame);
 void received_callback(const uint32_t &from, const String &msg);
-void IRAM_ATTR timer_overflow();
+void send_message();
+Task task_send_message(TASK_MILLISECOND * TASK_INTERVAL_MS, TASK_FOREVER, &send_message);
 
-DHT dht(DHTPIN, DHTTYPE);
 painlessMesh mesh;
+Scheduler scheduler;
+uint16_t message_counter = 0;
 
 volatile int overflows = 0;
 volatile int temp_read = 0;
@@ -35,47 +36,17 @@ void setup() {
 	Serial.begin(BAUDRATE);
 
 	//mesh
-	mesh.setDebugMsgTypes(ERROR | MESH_STATUS | CONNECTION | SYNC | COMMUNICATION | GENERAL | MSG_TYPES | REMOTE);   // all types on
+	// mesh.setDebugMsgTypes(ERROR | MESH_STATUS | CONNECTION | SYNC | COMMUNICATION | GENERAL | MSG_TYPES | REMOTE);   // all types on
 
-	mesh.init(ssid, password, PORT);
+	mesh.init(SSID, PASSWORD, &scheduler, PORT);
 	mesh.setContainsRoot(true);
 	mesh.onReceive(&received_callback);
 
-	//dht
-	timer1_attachInterrupt(timer_overflow);
-	timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);         //5MHz
-	timer1_write(OVERFLOW_LIMIT);
-
-	dht.begin();
+	scheduler.addTask(task_send_message);
 }
 
 void loop() {
 	mesh.update();
-
-	if (!temp_read &&  overflows == 6) {
-		temp_read = 1;
-		int handler_index = get_handler_index(temp_mode);	
-		measurement_handlers[handler_index]();
-
-		char message[MESSAGE_SIZE] = {0};
-		data_frame frame;
-		build_data_frame(frame, mesh.getNodeId(), TEMPERATURE, current_temp);
-		get_message(message, frame);
-		mesh.sendBroadcast(String(message));
-	}
-
-	else if (overflows == 12) {
-		overflows = 0;
-		temp_read = 0;
-		int handler_index = get_handler_index(hum_mode);	
-		measurement_handlers[handler_index]();
-
-		char message[MESSAGE_SIZE] = {0};
-		data_frame frame;
-		build_data_frame(frame, mesh.getNodeId(), HUMIDITY, current_hum);
-		get_message(message, frame);
-		mesh.sendBroadcast(String(message));
-	}
 }
 
 void get_message(char *msg, data_frame &frame) {
@@ -180,13 +151,25 @@ void received_callback(const uint32_t &from, const String &msg) {
 	int handler_index = get_handler_index(frame.data_type);
 	if (handler_index < 0)
 		return;
-		
+
 	char *end_ptr = nullptr;
 	float target = strtof(frame.measurement.target, &end_ptr);
 	mesh_receive_handlers[handler_index](frame.data_type, target);
+
+	task_send_message.enable();
 }
 
-void IRAM_ATTR timer_overflow() {
-	overflows++;
-	timer1_write(OVERFLOW_LIMIT);
+void send_message() {
+	int handler_index = get_handler_index(temp_mode);	
+	measurement_handlers[handler_index]();
+
+	char message[MESSAGE_SIZE] = {0};
+	data_frame frame;
+	build_data_frame(frame, mesh.getNodeId(), TEMPERATURE, 10);
+	get_message(message, frame);
+	mesh.sendBroadcast(String(message));
+	message_counter++;
+
+	if (message_counter >= 2000)
+		task_send_message.disable();
 }

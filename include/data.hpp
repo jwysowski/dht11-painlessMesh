@@ -11,11 +11,8 @@
 //mesh
 #define PORT            5555
 
-extern const char *ssid;
-extern const char *password;
-
-extern const char *temp_msg;
-extern const char *hum_msg;
+#define SSID			"esp_mesh"
+#define PASSWORD		"123456789"
 
 #define	START_SIGN		':'
 #define	END_SIGN		'\n'

@@ -1,11 +1,5 @@
 #include "data.hpp"
 
-const char *ssid = "esp_mesh";
-const char *password = "123456789";
-
-const char *temp_msg = "Temperature is: ";
-const char *hum_msg = "Humidity is: ";
-
 namespace {
 float normal_temp[] = {21.00, 21.10, 21.20, 21.30, 21.40, 21.50, 21.60, 21.70, 21.80, 21.90,
 						22.00, 22.10, 22.20, 22.30, 22.40, 22.50, 22.60, 22.70, 22.80, 22.90,
