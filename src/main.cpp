@@ -33,7 +33,7 @@ extern void (*mesh_receive_handlers[6])(char type, float target);
 extern void (*measurement_handlers[6])();
 
 void setup() {
-	Serial.begin(BAUDRATE);
+	// Serial.begin(BAUDRATE);
 
 	//mesh
 	// mesh.setDebugMsgTypes(ERROR | MESH_STATUS | CONNECTION | SYNC | COMMUNICATION | GENERAL | MSG_TYPES | REMOTE);   // all types on
@@ -101,6 +101,8 @@ void build_data_frame(data_frame &frame, uint32 id, bool is_temp, float val) {
 	}
 
 	sprintf(frame.node_id, "%u", id);
+	while(strlen(frame.node_id) < 10)
+		strcat(frame.node_id, "0");
 }
 
 void decode_msg(const char *msg, data_frame &frame) {
